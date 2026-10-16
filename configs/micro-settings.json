@@ -1,0 +1,13 @@
+{
+    "linter": true,
+    "linter.python": "flake8",
+    "tabsize": 4,
+    "tabstospaces": true,
+    "autoindent": true,
+    "syntax": true,
+    "savecursor": true,
+    "saveundo": true,
+    "mouse": true,
+    "scrollbar": true
+}
+

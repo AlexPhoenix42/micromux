@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# micromux — micro on top, shell below, in one tmux session.
+# Usage: micromux [file]
+
+set -euo pipefail
+
+FILE="${1:-untitled.py}"
+SESSION="micromux"
+
+# Shell to run in tmux panes. Bash is required: our config lives in ~/.bashrc
+# and the shipped tmux.conf assumes bash-idiomatic bindings. Don't rely on
+# $SHELL — it's the *login* shell, which may be zsh/fish even when running
+# this script from bash.
+SHELL_BIN="$(command -v bash || echo /bin/bash)"
+
+# Already inside tmux? Just split and launch micro.
+if [ -n "${TMUX:-}" ]; then
+    tmux split-window -v -l 30% -c "$PWD" "$SHELL_BIN"
+    tmux send-keys "micro $FILE" C-m
+    tmux select-pane -U
+    exit 0
+fi
+
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+# Create the session with bash in the top pane
+tmux new-session -d -s "$SESSION" -c "$PWD" "$SHELL_BIN"
+
+# Split off the bottom pane (also bash)
+tmux split-window -v -l 30% -t "$SESSION" -c "$PWD" "$SHELL_BIN"
+
+# Grab the top pane ID — index-independent
+TOP_PANE=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | head -n 1)
+
+# Launch micro in the top pane
+tmux send-keys -t "$TOP_PANE" "micro $FILE" C-m
+
+# Move focus to the top pane
+tmux select-pane -t "$TOP_PANE"
+
+tmux attach -t "$SESSION"
+
