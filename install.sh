@@ -6,6 +6,7 @@
 #   --keep-existing   Don't overwrite existing configs (install binaries + launcher only)
 #   --force           Overwrite configs without prompting (still backs up)
 #   --dry-run         Show what would happen, change nothing
+#   --no-sudo         Never invoke sudo (Debian/Ubuntu only; Void falls back to its normal flow)
 #   -h, --help        Show this help
 #
 # Must be run from a checked-out copy of the repo. Piped installs are refused.
@@ -20,7 +21,7 @@ if [ ! -t 0 ]; then
 
    Do this instead:
 
-       git clone https://github.com/AlexPhoenix42/micromux.git
+       git clone https://github.com/YOURNAME/micromux.git
        cd micromux
        ./install.sh
 
@@ -33,6 +34,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEEP_EXISTING=0
 FORCE=0
 DRY_RUN=0
+NO_SUDO=0
 
 # --- parse args ---
 for arg in "$@"; do
@@ -40,6 +42,7 @@ for arg in "$@"; do
         --keep-existing) KEEP_EXISTING=1 ;;
         --force)         FORCE=1 ;;
         --dry-run)       DRY_RUN=1 ;;
+        --no-sudo)       NO_SUDO=1 ;;
         -h|--help)
             sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
@@ -120,26 +123,131 @@ echo ">> Installing micro, tmux, and flake8 ($DISTRO)"
 
 case "$DISTRO" in
     debian)
-        run sudo apt update
-        for pkg in tmux flake8; do
-            if command -v "$pkg" >/dev/null 2>&1; then
-                echo "   $pkg already installed"
-            else
-                run sudo apt install -y "$pkg"
+        if [ "$NO_SUDO" -eq 1 ]; then
+            echo "   --no-sudo: never invoking sudo"
+
+            # tmux: cannot be installed user-local — refuse if missing
+            if ! command -v tmux >/dev/null 2>&1; then
+                cat >&2 <<'EOF'
+!! tmux is required but not installed, and --no-sudo forbids apt.
+   Install it once with:
+
+       sudo apt install tmux
+
+   Then re-run this installer.
+EOF
+                exit 1
             fi
-        done
-        if ! command -v micro >/dev/null 2>&1; then
-            if [ "$DRY_RUN" -eq 1 ]; then
-                echo "  [dry-run] would download micro and install to /usr/local/bin"
+            echo "   tmux already installed"
+
+            # micro: install to ~/bin (user-local)
+            if ! command -v micro >/dev/null 2>&1; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    echo "  [dry-run] would download micro to ~/bin"
+                else
+                    mkdir -p "$HOME/bin"
+                    pushd "$HOME/bin" >/dev/null
+                    if curl -fsSL https://getmic.ro | bash; then
+                        echo "   installed micro to $HOME/bin (user-local)"
+                    else
+                        popd >/dev/null
+                        cat >&2 <<'EOF'
+
+!! Failed to download micro from getmic.ro.
+   Check your internet connection, or install micro manually:
+   https://github.com/zyedidia/micro#installation
+EOF
+                        exit 1
+                    fi
+                    popd >/dev/null
+                fi
             else
-                curl -fsSL https://getmic.ro | bash
-                sudo mv micro /usr/local/bin/
+                echo "   micro already installed"
+            fi
+
+            # flake8: bootstrap pip to ~/.local if missing, then install --user.
+            # Handles PEP 668 ("externally managed") systems via --break-system-packages.
+            if ! command -v flake8 >/dev/null 2>&1; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    echo "  [dry-run] would ensure pip exists (bootstrap to ~/.local if needed), then install flake8 via pip --user"
+                else
+                    # Step A: bootstrap pip to ~/.local if `python3 -m pip` fails
+                    if ! python3 -m pip --version >/dev/null 2>&1; then
+                        echo "   pip not found; bootstrapping to ~/.local (no sudo)..."
+                        TMP_PIP="$(mktemp)"
+                        if curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$TMP_PIP" && \
+                           python3 "$TMP_PIP" --user --quiet; then
+                            rm -f "$TMP_PIP"
+                            export PATH="$HOME/.local/bin:$PATH"
+                            echo "   pip installed to $HOME/.local/bin"
+                        else
+                            rm -f "$TMP_PIP"
+                            cat >&2 <<'EOF'
+
+!! pip is not available, and bootstrapping it to ~/.local failed.
+   Options:
+   1. Install pip once (needs sudo, one time only):
+          sudo apt install python3-pip
+      Then re-run: ./install.sh --no-sudo
+
+   2. Install flake8 system-wide (needs sudo, one time only):
+          sudo apt install flake8
+      Then re-run: ./install.sh --no-sudo
+
+   3. Run the full installer without --no-sudo:
+          ./install.sh
+EOF
+                            exit 1
+                        fi
+                    fi
+
+                    # Step B: install flake8, handling PEP 668
+                    if python3 -m pip install --user flake8 2>/dev/null; then
+                        echo "   installed flake8 via pip --user"
+                    elif python3 -m pip install --user --break-system-packages flake8 2>/dev/null; then
+                        echo "   installed flake8 via pip --user (--break-system-packages for PEP 668)"
+                    else
+                        cat >&2 <<'EOF'
+
+!! Could not install flake8 via pip --user.
+   Options:
+   1. Install system-wide (needs sudo, one time only):
+          sudo apt install flake8
+
+   2. Run the full installer without --no-sudo:
+          ./install.sh
+EOF
+                        exit 1
+                    fi
+                fi
+            else
+                echo "   flake8 already installed"
             fi
         else
-            echo "   micro already installed"
+            run sudo apt update
+            for pkg in tmux flake8; do
+                if command -v "$pkg" >/dev/null 2>&1; then
+                    echo "   $pkg already installed"
+                else
+                    run sudo apt install -y "$pkg"
+                fi
+            done
+            if ! command -v micro >/dev/null 2>&1; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    echo "  [dry-run] would download micro and install to /usr/local/bin"
+                else
+                    curl -fsSL https://getmic.ro | bash
+                    sudo mv micro /usr/local/bin/
+                fi
+            else
+                echo "   micro already installed"
+            fi
         fi
         ;;
     void)
+        if [ "$NO_SUDO" -eq 1 ]; then
+            echo "   Note: --no-sudo is a no-op on Void (xbps requires root). Continuing normally."
+        fi
         run sudo xbps-install -Sy
         for pkg in tmux micro flake8; do
             if command -v "$pkg" >/dev/null 2>&1; then
@@ -193,7 +301,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     chmod +x "$HOME/bin/micromux"
 fi
 
-# --- PATH ---
+# --- PATH (bash) ---
 if ! grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null; then
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "  [dry-run] would add ~/bin to PATH in ~/.bashrc"
@@ -203,9 +311,9 @@ if ! grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null; then
     fi
 fi
 
-# --- fish PATH (only if the user actually has a fish config) ---
+# --- PATH (fish, only if user has a fish config) ---
 FISH_CONFIG="$HOME/.config/fish/config.fish"
-if [ -f "$FISH_CONFIG" ] && ! grep -q 'fish_add_path.*HOME/bin' "$FISH_CONFIG"; then
+if [ -f "$FISH_CONFIG" ] && ! grep -qx 'fish_add_path ~/bin' "$FISH_CONFIG"; then
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "  [dry-run] would add ~/bin to fish PATH in $FISH_CONFIG"
     else

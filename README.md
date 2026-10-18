@@ -52,6 +52,7 @@ care about, these flags let you control what happens.
 | `--keep-existing` | Never touch existing configs; install binaries + launcher only |
 | `--force` | Overwrite without prompting (still backs up) |
 | `--dry-run` | Print what would happen; change nothing |
+| `--no-sudo` | Never invoke sudo (Debian/Ubuntu only). See below. |
 | `-h`, `--help` | Show usage |
 
 Examples:
@@ -61,6 +62,22 @@ Examples:
 ./install.sh --dry-run         # preview before committing
 ./install.sh --force           # CI / scripted install
 ```
+
+### Installing without sudo
+
+On Debian/Ubuntu, `--no-sudo` runs the whole install without ever asking
+for a password. Anything missing is installed user-locally:
+
+```bash
+./install.sh --no-sudo
+```
+
+If `pip` is not available, the installer bootstraps it to `~/.local`
+using `get-pip.py` — no sudo required. On Ubuntu 24.04+ and Debian 12+,
+where pip's "externally managed environment" (PEP 668) blocks normal
+`--user` installs, the installer automatically retries with
+`--break-system-packages` (still user-local).
+
 
 ### Installing via pipe
 
