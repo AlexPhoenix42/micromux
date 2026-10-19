@@ -122,15 +122,33 @@ micromux myfile.py
 - Top pane: micro on `myfile.py`
 - Bottom pane: a shell where you can run `python3 myfile.py`
 
-### Keys
-
 | Key | Action |
 |---|---|
 | `Ctrl+S` | Save in micro (triggers lint) |
 | `Ctrl+Q` | Quit micro |
+| `F9` | Toggle between micro and the shell |
+| `F10` | Zoom the current pane fullscreen (toggle) |
 | `Alt+↑` / `Alt+↓` | Switch pane |
-| `Ctrl+B` then `d` | Detach tmux (session keeps running) |
+| `Alt+k` / `Alt+j` | Switch pane (vim-style fallback) |
+| `Ctrl+B` then `↑`/`↓` | Switch pane (works in any terminal) |
+| `Ctrl+B` then `d` | Detach tmux |
 | `tmux attach -t micromux` | Reattach |
+
+### How pane switching always works
+
+micromux sources its own keybindings from
+`~/.config/micromux/tmux-extras.conf` every time it launches — without
+touching your `~/.tmux.conf`. That means `F9` and `F10` work even if
+you declined the full tmux config during install or already have your
+own `.tmux.conf` with years of custom bindings.
+
+If you want the bindings in *all* your tmux sessions (not just
+micromux ones), accept the full tmux config during install, or source
+the extras file manually:
+
+```bash
+tmux source-file ~/.config/micromux/tmux-extras.conf
+```
 
 ## Linting
 
@@ -181,18 +199,44 @@ press `Alt+,` and `Alt+.`.
 ## Uninstall
 
 ```bash
-rm ~/.config/micro/settings.json
-rm ~/.tmux.conf            # or ~/.config/tmux/tmux.conf
-rm ~/bin/micromux
+./uninstall.sh
 ```
 
-Then remove `micro`, `tmux`, and `flake8` with your package manager.
+This removes:
 
-If you have timestamped backups (e.g. `~/.tmux.conf.bak.20261016-143022`),
-restore whichever one you want:
+- `~/bin/micromux` (the launcher)
+- `~/.config/micromux/tmux-extras.conf` (our keybindings)
+- The micromux PATH entries in `~/.bashrc` and (if present) `~/.config/fish/config.fish`
+- Prompts about each config file: `~/.config/micro/settings.json`, and your tmux config (`~/.tmux.conf` or `~/.config/tmux/tmux.conf`)
+
+**`micro`, `tmux`, and `flake8` are left installed.** They're general
+system utilities you probably want to keep. Remove them yourself with
+your package manager if you really don't need them:
 
 ```bash
-mv ~/.tmux.conf.bak.20261016-143022 ~/.tmux.conf
+sudo apt remove micro tmux flake8      # Ubuntu/Debian
+sudo xbps-remove micro tmux flake8     # Void
+```
+
+### Flags
+
+| Flag | What it does |
+|---|---|
+| *(none)* | Prompt about each config file (delete / restore backup / keep) |
+| `--keep-configs` | Remove only the launcher, extras, and PATH entries; leave all configs alone |
+| `--restore` | Restore the newest `<file>.bak.*` backup for each config instead of deleting |
+| `--force` | Delete configs and remove PATH entries without prompting |
+| `--dry-run` | Print what would happen; change nothing |
+| `-h`, `--help` | Show usage |
+
+### Restore backups manually
+
+If you deleted a config and want it back, the installer saved the
+previous one as `<file>.bak.YYYYMMDD-HHMMSS`. Find and restore it with:
+
+```bash
+ls ~/.config/micro/settings.json.bak.*
+mv ~/.config/micro/settings.json.bak.20261016-211430 ~/.config/micro/settings.json
 ```
 
 ## License

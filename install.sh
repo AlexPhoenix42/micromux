@@ -293,6 +293,11 @@ fi
 echo "   Using: $TMUX_DEST"
 safe_install "$REPO_DIR/configs/tmux.conf" "$TMUX_DEST" "tmux config"
 
+# --- micromux tmux extras (always installed, no prompts, no conflict) ---
+echo ">> Installing micromux tmux extras"
+run mkdir -p "$HOME/.config/micromux"
+run cp "$REPO_DIR/configs/tmux-extras.conf" "$HOME/.config/micromux/tmux-extras.conf"
+
 # --- micromux launcher ---
 echo ">> Installing micromux to ~/bin"
 run mkdir -p "$HOME/bin"

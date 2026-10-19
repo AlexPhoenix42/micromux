@@ -6,6 +6,7 @@ set -euo pipefail
 
 FILE="${1:-untitled.py}"
 SESSION="micromux"
+EXTRAS="$HOME/.config/micromux/tmux-extras.conf"
 
 # Shell to run in tmux panes. Bash is required: our config lives in ~/.bashrc
 # and the shipped tmux.conf assumes bash-idiomatic bindings. Don't rely on
@@ -13,8 +14,16 @@ SESSION="micromux"
 # this script from bash.
 SHELL_BIN="$(command -v bash || echo /bin/bash)"
 
+# Apply micromux keybindings to the current tmux server, if the extras
+# file is installed. Idempotent and safe to call on every launch.
+apply_extras() {
+    [ -f "$EXTRAS" ] || return 0
+    tmux source-file "$EXTRAS" 2>/dev/null || true
+}
+
 # Already inside tmux? Just split and launch micro.
 if [ -n "${TMUX:-}" ]; then
+    apply_extras
     tmux split-window -v -l 30% -c "$PWD" "$SHELL_BIN"
     tmux send-keys "micro $FILE" C-m
     tmux select-pane -U
@@ -22,6 +31,10 @@ if [ -n "${TMUX:-}" ]; then
 fi
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+# Apply extras before creating the session, so bindings are live
+# the moment the user is inside tmux.
+apply_extras
 
 # Create the session with bash in the top pane
 tmux new-session -d -s "$SESSION" -c "$PWD" "$SHELL_BIN"
