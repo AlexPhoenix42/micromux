@@ -32,12 +32,12 @@ fi
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+# Create the session with bash in the top pane
+tmux new-session -d -s "$SESSION" -c "$PWD" "$SHELL_BIN"
+
 # Apply extras before creating the session, so bindings are live
 # the moment the user is inside tmux.
 apply_extras
-
-# Create the session with bash in the top pane
-tmux new-session -d -s "$SESSION" -c "$PWD" "$SHELL_BIN"
 
 # Split off the bottom pane (also bash)
 tmux split-window -v -l 30% -t "$SESSION" -c "$PWD" "$SHELL_BIN"

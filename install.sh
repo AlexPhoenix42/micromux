@@ -1,30 +1,25 @@
 #!/usr/bin/env bash
-# install.sh — install micro + tmux + flake8 + micromux configs.
+# install.sh — install micro, tmux, flake8, and micromux.
 # Supports Ubuntu/Debian and Void Linux.
 #
+# Never modifies native tmux configuration.
+# PATH setup only appends a missing entry to an existing shell config.
+#
 # Flags:
-#   --keep-existing   Don't overwrite existing configs (install binaries + launcher only)
-#   --force           Overwrite configs without prompting (still backs up)
+#   --keep-existing   Don't overwrite existing configs
+#   --force           Overwrite managed configs without prompting (backs up)
 #   --dry-run         Show what would happen, change nothing
-#   --no-sudo         Never invoke sudo (Debian/Ubuntu only; Void falls back to its normal flow)
+#   --no-sudo         Never invoke sudo (Debian/Ubuntu only; Void uses normal flow)
 #   -h, --help        Show this help
 #
-# Must be run from a checked-out copy of the repo. Piped installs are refused.
+# Must be run from a checked-out copy of the repo.
 
 set -euo pipefail
 
-# --- refuse piped installs (script needs the repo) ---
 if [ ! -t 0 ]; then
     cat >&2 <<'EOF'
-!! This installer must be run from a checked-out copy of the repo.
-   It needs the local configs/ directory to copy files from.
-
-   Do this instead:
-
-       git clone https://github.com/YOURNAME/micromux.git
-       cd micromux
-       ./install.sh
-
+!! Run this installer from a checked-out copy of the repository.
+   It needs the local configs/ directory.
 EOF
     exit 1
 fi
@@ -36,7 +31,6 @@ FORCE=0
 DRY_RUN=0
 NO_SUDO=0
 
-# --- parse args ---
 for arg in "$@"; do
     case "$arg" in
         --keep-existing) KEEP_EXISTING=1 ;;
@@ -44,69 +38,97 @@ for arg in "$@"; do
         --dry-run)       DRY_RUN=1 ;;
         --no-sudo)       NO_SUDO=1 ;;
         -h|--help)
-            sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+            printf '%s\n' \
+                "Usage: ./install.sh [OPTIONS]" \
+                "  --keep-existing  Preserve existing managed configs" \
+                "  --force          Overwrite managed configs after backup" \
+                "  --dry-run        Show actions without changing anything" \
+                "  --no-sudo        Avoid sudo where supported" \
+                "  -h, --help       Show this help"
             exit 0
             ;;
         *)
-            echo "Unknown option: $arg" >&2
+            printf 'Unknown option: %s\n' "$arg" >&2
             exit 1
             ;;
     esac
 done
 
-# --- helpers ---
 run() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  [dry-run] $*"
+        printf '  [dry-run]'
+        printf ' %q' "$@"
+        printf '\n'
     else
         "$@"
     fi
 }
 
 # safe_install SRC DEST LABEL
-# - DEST doesn't exist     → copy
-# - --keep-existing        → skip
-# - otherwise              → back up (timestamped), then copy
-# - prompts unless --force or --dry-run
 safe_install() {
     local src="$1" dest="$2" label="$3"
 
     if [ ! -e "$dest" ]; then
         echo ">> Installing $label to $dest"
         run mkdir -p "$(dirname "$dest")"
-        run cp "$src" "$dest"
+        run cp -- "$src" "$dest"
         return 0
     fi
 
     if [ "$KEEP_EXISTING" -eq 1 ]; then
-        echo ">> $dest already exists — keeping it (--keep-existing)"
+        echo ">> Keeping existing $label: $dest"
         return 0
     fi
 
-    local stamp backup
+    local stamp backup answer
     stamp="$(date +%Y%m%d-%H%M%S)"
     backup="${dest}.bak.${stamp}"
 
-    if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-        echo
-        echo "!! $dest already exists."
-        echo "   Backing it up to: $backup"
-        printf "   Overwrite %s? [y/N] " "$dest"
+    if [ "$FORCE" -eq 0 ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  [dry-run] Would ask before replacing $dest"
+            echo "  [dry-run] Would back up existing file to $backup"
+            return 0
+        fi
+
+        printf '\n!! %s already exists.\n' "$dest"
+        printf '   Replace it after backing it up? [y/N] '
         read -r answer
         case "$answer" in
             [yY]|[yY][eE][sS]) ;;
             *)
-                echo "   Skipped $label."
+                echo "   Keeping existing $label"
                 return 0
                 ;;
         esac
     fi
 
-    echo ">> Backing up existing $label → $backup"
-    run cp "$dest" "$backup"
+    echo ">> Backing up $dest to $backup"
+    run cp -- "$dest" "$backup"
     echo ">> Installing $label to $dest"
-    run cp "$src" "$dest"
-    echo "   (to restore your old config: mv '$backup' '$dest')"
+    run cp -- "$src" "$dest"
+}
+
+append_line_if_missing() {
+    local file="$1" line="$2" label="$3"
+
+    if [ ! -f "$file" ]; then
+        echo "   No $label found; leaving shell configuration untouched: $file"
+        return 0
+    fi
+
+    if grep -Fqx -- "$line" "$file"; then
+        echo ">> $label already contains the PATH entry"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  [dry-run] Would append PATH entry to $file"
+        return 0
+    fi
+
+    printf '\n%s\n' "$line" >> "$file"
+    echo ">> Appended PATH entry to $file"
 }
 
 # --- detect distro ---
@@ -115,7 +137,7 @@ if command -v apt >/dev/null 2>&1; then
 elif command -v xbps-install >/dev/null 2>&1; then
     DISTRO="void"
 else
-    echo "Unsupported distro. Install micro, tmux, and flake8 manually, then copy configs." >&2
+    echo "Unsupported distro. Install micro, tmux, and flake8 manually." >&2
     exit 1
 fi
 
@@ -126,213 +148,170 @@ case "$DISTRO" in
         if [ "$NO_SUDO" -eq 1 ]; then
             echo "   --no-sudo: never invoking sudo"
 
-            # tmux: cannot be installed user-local — refuse if missing
             if ! command -v tmux >/dev/null 2>&1; then
-                cat >&2 <<'EOF'
-!! tmux is required but not installed, and --no-sudo forbids apt.
-   Install it once with:
-
-       sudo apt install tmux
-
-   Then re-run this installer.
-EOF
+                echo "!! tmux is missing. Install it with: sudo apt install tmux" >&2
                 exit 1
             fi
             echo "   tmux already installed"
 
-            # micro: install to ~/bin (user-local)
             if ! command -v micro >/dev/null 2>&1; then
                 if [ "$DRY_RUN" -eq 1 ]; then
-                    echo "  [dry-run] would download micro to ~/bin"
+                    echo "  [dry-run] Would download micro into ~/bin"
                 else
                     mkdir -p "$HOME/bin"
-                    pushd "$HOME/bin" >/dev/null
-                    if curl -fsSL https://getmic.ro | bash; then
-                        echo "   installed micro to $HOME/bin (user-local)"
-                    else
-                        popd >/dev/null
-                        cat >&2 <<'EOF'
-
-!! Failed to download micro from getmic.ro.
-   Check your internet connection, or install micro manually:
-   https://github.com/zyedidia/micro#installation
-EOF
-                        exit 1
-                    fi
-                    popd >/dev/null
+                    (
+                        cd "$HOME/bin"
+                        curl -fsSL https://getmic.ro | bash
+                    )
                 fi
             else
                 echo "   micro already installed"
             fi
 
-            # flake8: bootstrap pip to ~/.local if missing, then install --user.
-            # Handles PEP 668 ("externally managed") systems via --break-system-packages.
             if ! command -v flake8 >/dev/null 2>&1; then
                 if [ "$DRY_RUN" -eq 1 ]; then
-                    echo "  [dry-run] would ensure pip exists (bootstrap to ~/.local if needed), then install flake8 via pip --user"
+                    echo "  [dry-run] Would install flake8 using pip --user"
                 else
-                    # Step A: bootstrap pip to ~/.local if `python3 -m pip` fails
                     if ! python3 -m pip --version >/dev/null 2>&1; then
-                        echo "   pip not found; bootstrapping to ~/.local (no sudo)..."
-                        TMP_PIP="$(mktemp)"
-                        if curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$TMP_PIP" && \
-                           python3 "$TMP_PIP" --user --quiet; then
-                            rm -f "$TMP_PIP"
-                            export PATH="$HOME/.local/bin:$PATH"
-                            echo "   pip installed to $HOME/.local/bin"
-                        else
-                            rm -f "$TMP_PIP"
-                            cat >&2 <<'EOF'
-
-!! pip is not available, and bootstrapping it to ~/.local failed.
-   Options:
-   1. Install pip once (needs sudo, one time only):
-          sudo apt install python3-pip
-      Then re-run: ./install.sh --no-sudo
-
-   2. Install flake8 system-wide (needs sudo, one time only):
-          sudo apt install flake8
-      Then re-run: ./install.sh --no-sudo
-
-   3. Run the full installer without --no-sudo:
-          ./install.sh
-EOF
-                            exit 1
-                        fi
+                        echo "!! pip is missing. Install python3-pip, then rerun." >&2
+                        exit 1
                     fi
 
-                    # Step B: install flake8, handling PEP 668
-                    if python3 -m pip install --user flake8 2>/dev/null; then
-                        echo "   installed flake8 via pip --user"
-                    elif python3 -m pip install --user --break-system-packages flake8 2>/dev/null; then
-                        echo "   installed flake8 via pip --user (--break-system-packages for PEP 668)"
-                    else
-                        cat >&2 <<'EOF'
-
-!! Could not install flake8 via pip --user.
-   Options:
-   1. Install system-wide (needs sudo, one time only):
-          sudo apt install flake8
-
-   2. Run the full installer without --no-sudo:
-          ./install.sh
-EOF
-                        exit 1
+                    if ! python3 -m pip install --user flake8 2>/dev/null; then
+                        python3 -m pip install --user --break-system-packages flake8
                     fi
                 fi
             else
                 echo "   flake8 already installed"
             fi
         else
-            run sudo apt update
-            for pkg in tmux flake8; do
-                if command -v "$pkg" >/dev/null 2>&1; then
-                    echo "   $pkg already installed"
-                else
-                    run sudo apt install -y "$pkg"
-                fi
+            need_sudo=0
+            for pkg in tmux flake8 micro; do
+                command -v "$pkg" >/dev/null 2>&1 || { need_sudo=1; break; }
             done
-            if ! command -v micro >/dev/null 2>&1; then
-                if [ "$DRY_RUN" -eq 1 ]; then
-                    echo "  [dry-run] would download micro and install to /usr/local/bin"
-                else
-                    curl -fsSL https://getmic.ro | bash
-                    sudo mv micro /usr/local/bin/
-                fi
-            else
+
+            if [ "$need_sudo" -eq 0 ]; then
+                echo "   tmux already installed"
+                echo "   flake8 already installed"
                 echo "   micro already installed"
+                echo "   nothing to install; skipping apt"
+            else
+                run sudo apt update
+
+                for pkg in tmux flake8; do
+                    if command -v "$pkg" >/dev/null 2>&1; then
+                        echo "   $pkg already installed"
+                    else
+                        run sudo apt install -y "$pkg"
+                    fi
+                done
+
+                if ! command -v micro >/dev/null 2>&1; then
+                    if [ "$DRY_RUN" -eq 1 ]; then
+                        echo "  [dry-run] Would download micro and install to /usr/local/bin"
+                    else
+                        TMP_DIR="$(mktemp -d)"
+                        trap 'rm -rf "$TMP_DIR"' EXIT
+                        (
+                            cd "$TMP_DIR"
+                            curl -fsSL https://getmic.ro | bash
+                        )
+                        run sudo install -m 0755 "$TMP_DIR/micro" /usr/local/bin/micro
+                        rm -rf "$TMP_DIR"
+                        trap - EXIT
+                    fi
+                else
+                    echo "   micro already installed"
+                fi
             fi
         fi
         ;;
     void)
         if [ "$NO_SUDO" -eq 1 ]; then
-            echo "   Note: --no-sudo is a no-op on Void (xbps requires root). Continuing normally."
+            echo "   Note: --no-sudo is not supported for package installation on Void."
         fi
-        run sudo xbps-install -Sy
+
+        need_sudo=0
         for pkg in tmux micro flake8; do
-            if command -v "$pkg" >/dev/null 2>&1; then
-                echo "   $pkg already installed"
-            else
-                run sudo xbps-install -y "$pkg"
-            fi
+            command -v "$pkg" >/dev/null 2>&1 || { need_sudo=1; break; }
         done
+
+        if [ "$need_sudo" -eq 0 ]; then
+            echo "   tmux already installed"
+            echo "   micro already installed"
+            echo "   flake8 already installed"
+            echo "   nothing to install; skipping xbps"
+        else
+            run sudo xbps-install -Sy
+
+            for pkg in tmux micro flake8; do
+                if command -v "$pkg" >/dev/null 2>&1; then
+                    echo "   $pkg already installed"
+                else
+                    run sudo xbps-install -y "$pkg"
+                fi
+            done
+        fi
         ;;
 esac
 
-if ! command -v flake8 >/dev/null 2>&1; then
-    echo "!! flake8 not found on PATH. Trying pip fallback..."
-    run python3 -m pip install --user flake8 || \
-        echo "!! Could not install flake8. Linting will be disabled."
-fi
-
-# --- micro config ---
-echo ">> Installing micro config"
+# --- Micro config ---
+echo ">> Installing Micro config"
 safe_install "$REPO_DIR/configs/micro-settings.json" \
-             "$HOME/.config/micro/settings.json" \
-             "micro settings"
+    "$HOME/.config/micro/settings.json" \
+    "Micro settings"
 
-# --- tmux config: pick the location tmux actually reads ---
-echo ">> Installing tmux config"
-
-TMUX_DEST=""
-if [ -f "$HOME/.tmux.conf" ]; then
-    TMUX_DEST="$HOME/.tmux.conf"
-elif [ -f "$HOME/.config/tmux/tmux.conf" ]; then
-    TMUX_DEST="$HOME/.config/tmux/tmux.conf"
-elif [ -d "$HOME/.config/tmux" ]; then
-    TMUX_DEST="$HOME/.config/tmux/tmux.conf"
-else
-    TMUX_DEST="$HOME/.tmux.conf"
-fi
-
-if [ -f "$HOME/.tmux.conf" ] && [ -f "$HOME/.config/tmux/tmux.conf" ]; then
-    echo "!! Note: both tmux config locations exist."
-    echo "   tmux reads ~/.tmux.conf and ignores ~/.config/tmux/tmux.conf."
-fi
-
-echo "   Using: $TMUX_DEST"
-safe_install "$REPO_DIR/configs/tmux.conf" "$TMUX_DEST" "tmux config"
-
-# --- micromux tmux extras (always installed, no prompts, no conflict) ---
+# --- micromux-owned tmux extras only ---
 echo ">> Installing micromux tmux extras"
 run mkdir -p "$HOME/.config/micromux"
-run cp "$REPO_DIR/configs/tmux-extras.conf" "$HOME/.config/micromux/tmux-extras.conf"
+safe_install "$REPO_DIR/configs/tmux-extras.conf" \
+    "$HOME/.config/micromux/tmux-extras.conf" \
+    "micromux tmux extras"
 
 # --- micromux launcher ---
-echo ">> Installing micromux to ~/bin"
+echo ">> Installing micromux launcher"
 run mkdir -p "$HOME/bin"
-safe_install "$REPO_DIR/micromux" "$HOME/bin/micromux" "micromux launcher"
+safe_install "$REPO_DIR/micromux" \
+    "$HOME/bin/micromux" \
+    "micromux launcher"
+
 if [ "$DRY_RUN" -eq 0 ]; then
     chmod +x "$HOME/bin/micromux"
 fi
 
-# --- PATH (bash) ---
-if ! grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  [dry-run] would add ~/bin to PATH in ~/.bashrc"
-    else
-        echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
-        echo ">> Added ~/bin to PATH in ~/.bashrc"
-    fi
-fi
-
-# --- PATH (fish, only if user has a fish config) ---
-FISH_CONFIG="$HOME/.config/fish/config.fish"
-if [ -f "$FISH_CONFIG" ] && ! grep -qx 'fish_add_path ~/bin' "$FISH_CONFIG"; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  [dry-run] would add ~/bin to fish PATH in $FISH_CONFIG"
-    else
-        echo '' >> "$FISH_CONFIG"
-        echo '# added by micromux install.sh' >> "$FISH_CONFIG"
-        echo 'fish_add_path ~/bin' >> "$FISH_CONFIG"
-        echo ">> Added ~/bin to fish PATH in $FISH_CONFIG"
-    fi
-fi
+# --- PATH setup: append only; never rewrite existing files ---
+case "${SHELL##*/}" in
+    fish)
+		# Single quotes are intentional: the line is written literally into
+        # the user's fish config, so $HOME must NOT expand here.
+        # shellcheck disable=SC2016
+        append_line_if_missing \
+            "$HOME/.config/fish/config.fish" \
+            'fish_add_path "$HOME/bin"' \
+            "Fish config"
+        ;;
+    bash)
+		# Single quotes are intentional: the line is written literally into
+        # ~/.bashrc, so $HOME must NOT expand here.
+        # shellcheck disable=SC2016
+        append_line_if_missing \
+            "$HOME/.bashrc" \
+            'export PATH="$HOME/bin:$PATH"' \
+            "Bash config"
+        ;;
+    *)
+        echo "!! Unknown login shell; no shell config was modified."
+        echo '   Add ~/bin to your PATH manually if needed.'
+        ;;
+esac
 
 echo
-echo "Done. Restart your shell (or run: source ~/.bashrc), then:"
+echo "Done."
+echo "Native tmux configs were left untouched."
+echo "Shell PATH setup only appends a missing line to an existing shell config."
 echo
+echo "Restart your shell, then run:"
 echo "    micromux myfile.py"
 echo
-echo "Linter: flake8 runs automatically on save in micro."
+echo "Linter: flake8 runs automatically on save in Micro."
 
